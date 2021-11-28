@@ -1,5 +1,6 @@
 
 import codecs
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +12,7 @@ from hadoop_runner import fit_and_predict
 app = FastAPI()
 
 origins = [
-    "http://localhost:3000",
+    os.environ["FRONT_URL"],
 ]
 
 app.add_middleware(
