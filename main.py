@@ -12,7 +12,7 @@ from hadoop_runner import fit_and_predict
 app = FastAPI()
 
 origins = [
-    os.environ["FRONT_URL"],
+    os.environ["FASTAPI_FRONT_URL"],
 ]
 
 app.add_middleware(
