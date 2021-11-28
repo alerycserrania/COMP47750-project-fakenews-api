@@ -10,7 +10,7 @@ ALPHA = 1.0
 
 
 def get_class_count_and_nb_words():
-    client = InsecureClient('http://localhost:9870')
+    client = InsecureClient('http://0.0.0.0:9870')
     class_count = dict()
     with client.read(f'{path}/class_priors.csv', encoding='utf-8', ) as f:
         reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
