@@ -10,7 +10,7 @@ ALPHA = 1.0
 
 
 def get_class_count_and_nb_words():
-    client = InsecureClient('http://localhost:50070')
+    client = InsecureClient(os.environ['FASTAPI_HADOOP_WEB_URL'])
     class_count = dict()
     with client.read(f'{path}/class_priors.csv', encoding='utf-8', ) as f:
         reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)

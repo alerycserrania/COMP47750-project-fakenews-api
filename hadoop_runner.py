@@ -7,7 +7,7 @@ from hdfs import InsecureClient
 
 def fit_and_predict(data: IO, training_proportion: float):
     idx = uuid.uuid4().hex
-    client = InsecureClient('http://localhost:9870')
+    client = InsecureClient(os.environ['FASTAPI_HADOOP_WEB_URL'])
 
     # first step: split data into training/test
     trainings, tests = split_data(data, training_proportion)

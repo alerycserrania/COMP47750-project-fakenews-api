@@ -9,7 +9,7 @@ path = sys.argv[1]
 
 def get_class_priors():
     class_priors = dict()
-    client = InsecureClient('http://0.0.0.0:9870')
+    client = InsecureClient(os.environ['FASTAPI_HADOOP_WEB_URL'])
     with client.read(f'{path}/class_priors.csv', encoding='utf-8') as f:
         reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
         for cl, _, prior in reader:

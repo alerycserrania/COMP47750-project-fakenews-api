@@ -19,7 +19,7 @@ def tokenize(content):
     return tokens
 
 def get_feature_probas():
-    client = InsecureClient('http://localhost:50070')
+    client = InsecureClient(os.environ['FASTAPI_HADOOP_WEB_URL'])
     with client.read(f'{path}/feature_probas.csv', encoding='utf-8') as f:
         reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
         return {w: (float(p_real), float(p_fake)) for w, p_real, p_fake in reader}
