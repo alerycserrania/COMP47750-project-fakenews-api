@@ -4,6 +4,7 @@ import csv
 import io
 import sys
 import re
+import os
 from hdfs import InsecureClient
 
 path = sys.argv[1]

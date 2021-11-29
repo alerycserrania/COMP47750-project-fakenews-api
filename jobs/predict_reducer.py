@@ -3,6 +3,7 @@
 from collections import defaultdict
 import sys
 import csv
+import os
 from hdfs import InsecureClient
 
 path = sys.argv[1]

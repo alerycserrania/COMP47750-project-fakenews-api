@@ -3,6 +3,7 @@
 import sys
 import csv
 import math
+import os
 from hdfs import InsecureClient
 
 path = sys.argv[1]
