@@ -1,9 +1,13 @@
-from typing import IO
+from typing import IO, List
 import uuid
 import csv
 import random
 import os
+import json
 from hdfs import InsecureClient
+from sqlalchemy import text
+
+from db import SessionLocal
 
 def fit_and_predict(data: IO, training_proportion: float):
     idx = uuid.uuid4().hex
@@ -12,43 +16,157 @@ def fit_and_predict(data: IO, training_proportion: float):
     # first step: split data into training/test
     trainings, tests = split_data(data, training_proportion)
 
-    with client.write(f'{idx}/training_data.csv', encoding='utf-8') as f:
-        writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator='\n')
-        for line in trainings:
+    try:
+        with client.write(f'{idx}/training_data.csv', encoding='utf-8') as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator='\n')
+            for line in trainings:
+                writer.writerow(line)
+
+        with client.write(f'{idx}/test_data.csv', encoding='utf-8') as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator='\n')
+            for line in tests:
+                writer.writerow(line)
+        
+        # wordcount step: count number of occurence of words in fake and real news
+        os.system(f'mapred streaming -input {idx}/training_data.csv -output {idx}/wordcount '
+                f'-mapper jobs/wordcount_mapper.py -reducer jobs/wordcount_reducer.py')
+        os.system(f'hadoop fs -text {idx}/wordcount/* | hadoop fs -put - {idx}/wordcount.csv')
+
+        # vocab count step: count number of words (features) in the dataset
+        os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/nb_words '
+                f'-mapper jobs/vocab_reducer.py')
+        os.system(f'hadoop fs -text {idx}/nb_words/* | hadoop fs -put - {idx}/nb_words.txt')
+
+        # class priors step: calculate log of class priors
+        os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/class_priors '
+                f'-mapper jobs/class_priors_mapper.py -reducer jobs/class_priors_reducer.py')
+        os.system(f'hadoop fs -text {idx}/class_priors/* | hadoop fs -put - {idx}/class_priors.csv')
+        
+        # feature probas step: calculate log of feature probas
+        os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/feature_probas '
+                f'-mapper "jobs/feature_probas_reducer.py {idx}"')
+        os.system(f'hadoop fs -text {idx}/feature_probas/* | hadoop fs -put - {idx}/feature_probas.csv')
+        
+        # run tests step: predict and create result file
+        os.system(f'mapred streaming -input {idx}/test_data.csv -output {idx}/test_result '
+                f'-mapper "jobs/predict_mapper.py {idx}" -reducer "jobs/predict_reducer.py {idx}"')
+        os.system(f'hadoop fs -text {idx}/test_result/* | hadoop fs -put - {idx}/test_result.csv')
+
+
+        stats = generate_stats(idx, client)
+        store_model(idx, client, stats)
+    finally:
+        client.delete(f'{idx}/', recursive=True)
+
+    return stats
+
+
+def predict(idx: str, tests: List[str]):
+    client = InsecureClient(os.environ['FASTAPI_HADOOP_WEB_URL'])
+
+    try:
+        stats = load_model(idx, client)
+
+        with client.write(f'{idx}/test_data.csv', encoding='utf-8') as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator='\n')
+            for line in tests:
+                writer.writerow(['', '', '', '', '', '', line])
+
+        os.system(f'mapred streaming -input {idx}/test_data.csv -output {idx}/test_result '
+                f'-mapper "jobs/predict_mapper.py {idx}" -reducer "jobs/predict_reducer.py {idx}"')
+        os.system(f'hadoop fs -text {idx}/test_result/* | hadoop fs -put - {idx}/test_result.csv')
+        
+        with client.read(f'{idx}/test_result.csv', encoding='utf-8') as f:
+            test_result = list(csv.reader(f, quoting=csv.QUOTE_MINIMAL))
+    finally:
+        client.delete(f'{idx}/', recursive=True)
+
+    return [
+        {'no': int(line[0]), 'result': line[1]}
+        for line in test_result
+    ]
+
+def store_model(idx: str, client: InsecureClient, stats: dict):
+    with client.read(f'{idx}/class_priors.csv', encoding='utf-8') as f:
+        reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
+        class_priors = [{
+            'idx': idx,
+            'cl': cl,
+            'p_real': float(p_real),
+            'p_fake': float(p_fake),
+        } for cl, p_real, p_fake in reader]
+
+    with client.read(f'{idx}/feature_probas.csv', encoding='utf-8') as f:
+        reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
+        feature_probas = [{
+            'idx': idx,
+            'word': word,
+            'p_real': float(p_real),
+            'p_fake': float(p_fake),
+        } for word, p_real, p_fake in reader]
+
+    with SessionLocal() as db:
+        db.execute(
+            text("INSERT INTO class_priors (idx, cl, p_real, p_fake) VALUES(:idx, :cl, :p_real, :p_fake)"),
+            class_priors
+        )
+
+        db.execute(
+            text("INSERT INTO feature_probas (idx, word, p_real, p_fake) VALUES(:idx, :word, :p_real, :p_fake)"),
+            feature_probas
+        )
+
+        db.execute(
+            text("INSERT INTO stats (idx, stats) VALUES(:idx, :stats)"),
+            {"idx": idx, "stats": json.dumps(stats)}
+        )
+
+        db.commit()
+
+
+def get_stats(idx: str):
+    with SessionLocal() as db:
+        stats = db.execute(
+            text('SELECT * FROM stats where idx=:idx'),
+            {"idx": idx}
+        ).fetchone()
+
+    return json.loads(stats[1])
+
+def load_model(idx: str, client: InsecureClient):
+    with SessionLocal() as db:
+        class_priors = db.execute(
+            text('SELECT * FROM class_priors where idx=:idx'),
+            {"idx": idx}
+        ).fetchall()
+
+        feature_probas = db.execute(
+            text('SELECT * FROM feature_probas where idx=:idx'),
+            {"idx": idx}
+        ).fetchall()
+
+        stats = db.execute(
+            text('SELECT * FROM stats where idx=:idx'),
+            {"idx": idx}
+        ).fetchone()
+    
+    class_priors = [l[1:] for l in class_priors]
+    feature_probas = [l[1:] for l in feature_probas]
+    stats = json.loads(stats[1])
+
+    with client.write(f'{idx}/class_priors.csv', encoding='utf-8') as f:
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
+        for line in class_priors:
             writer.writerow(line)
 
-    with client.write(f'{idx}/test_data.csv', encoding='utf-8') as f:
-        writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator='\n')
-        for line in tests:
+    with client.write(f'{idx}/feature_probas.csv', encoding='utf-8') as f:
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
+        for line in feature_probas:
             writer.writerow(line)
-    
-    # wordcount step: count number of occurence of words in fake and real news
-    os.system(f'mapred streaming -input {idx}/training_data.csv -output {idx}/wordcount '
-              f'-mapper jobs/wordcount_mapper.py -reducer jobs/wordcount_reducer.py')
-    os.system(f'hadoop fs -text {idx}/wordcount/* | hadoop fs -put - {idx}/wordcount.csv')
+        
+    return stats
 
-    # vocab count step: count number of words (features) in the dataset
-    os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/nb_words '
-              f'-mapper jobs/vocab_reducer.py')
-    os.system(f'hadoop fs -text {idx}/nb_words/* | hadoop fs -put - {idx}/nb_words.txt')
 
-    # class priors step: calculate log of class priors
-    os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/class_priors '
-              f'-mapper jobs/class_priors_mapper.py -reducer jobs/class_priors_reducer.py')
-    os.system(f'hadoop fs -text {idx}/class_priors/* | hadoop fs -put - {idx}/class_priors.csv')
-    
-    # feature probas step: calculate log of feature probas
-    os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/feature_probas '
-              f'-mapper "jobs/feature_probas_reducer.py {idx}"')
-    os.system(f'hadoop fs -text {idx}/feature_probas/* | hadoop fs -put - {idx}/feature_probas.csv')
-    
-    # run tests step: predict and create result file
-    os.system(f'mapred streaming -input {idx}/test_data.csv -output {idx}/test_result '
-              f'-mapper "jobs/predict_mapper.py {idx}" -reducer "jobs/predict_reducer.py {idx}"')
-    os.system(f'hadoop fs -text {idx}/test_result/* | hadoop fs -put - {idx}/test_result.csv')
-
-    # get stats data
-    return generate_stats(idx, client)
 
 
 def split_data(data: IO, training_proportion: float):
@@ -115,17 +233,18 @@ def generate_stats(idx: str, client: InsecureClient):
     tp, tn = 0, 0
     fp, fn = 0, 0
     for i in range(len(test_result)):
-        idx = int(test_result[i][0])
-        if test_result[i][1] == 'f' and test_data[idx][3] == 'f':
+        id_line = int(test_result[i][0])
+        if test_result[i][1] == 'f' and test_data[id_line][3] == 'f':
             tp += 1
-        elif test_result[i][1] == 'r' and test_data[idx][3] == 'r':
+        elif test_result[i][1] == 'r' and test_data[id_line][3] == 'r':
             tn += 1
-        elif test_result[i][1] == 'f' and test_data[idx][3] == 'r':
+        elif test_result[i][1] == 'f' and test_data[id_line][3] == 'r':
             fp += 1
         else:
             fn += 1
 
     return {
+        "idx": idx,
         "nb_articles": {
             "real": nb_real_articles,
             "fake": nb_fake_articles,
