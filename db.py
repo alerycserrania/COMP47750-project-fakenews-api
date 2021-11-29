@@ -19,16 +19,16 @@ meta = MetaData()
 
 class_priors = Table(
    'class_priors', meta, 
-   Column('idx', String(64), primary_key = True), 
-   Column('cl', String(1), primary_key = True), 
+   Column('idx', String(64)), 
+   Column('cl', String(1)), 
    Column('p_real', Float), 
    Column('p_fake', Float), 
 )
 
 feature_probas = Table(
    'feature_probas', meta, 
-   Column('idx', String(64), primary_key = True), 
-   Column('word', String(255), primary_key = True), 
+   Column('idx', String(64)), 
+   Column('word', String(255)), 
    Column('p_real', Float), 
    Column('p_fake', Float), 
 )
