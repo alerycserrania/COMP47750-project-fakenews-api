@@ -6,6 +6,7 @@ import os
 import json
 from hdfs import InsecureClient
 from sqlalchemy import text
+import math
 
 from db import SessionLocal
 
@@ -81,11 +82,23 @@ def predict(idx: str, tests: List[str]):
     finally:
         client.delete(f'{idx}/', recursive=True)
 
+    print(test_result)
     return [
-        {'no': int(line[0]), 'result': line[1]}
+        {'no': int(line[0]), 'result': line[1], 'proba': log_likel_to_proba(float(line[2]), float(line[3]), line[1])}
         for line in test_result
     ]
 
+def logsumexp(p_real: float, p_fake: float):
+    c = max(p_real, p_fake)
+    return c + math.log(math.exp(p_real - c) + math.exp(p_fake - c))
+
+def log_likel_to_proba(p_real: float, p_fake: float, result: str):
+    if result == 'r':
+        return math.exp(p_real - logsumexp(p_real, p_fake))
+    elif result == 'f':
+        return math.exp(p_fake - logsumexp(p_real, p_fake))
+
+        
 def store_model(idx: str, client: InsecureClient, stats: dict):
     with client.read(f'{idx}/class_priors.csv', encoding='utf-8') as f:
         reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
