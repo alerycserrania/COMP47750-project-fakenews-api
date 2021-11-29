@@ -2,6 +2,7 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import Table, Column, String, MetaData, Float
+from sqlalchemy.sql.sqltypes import Text
 
 # SQLALCHEMY_DATABASE_URL = "sqlite:///./sql_app.db"
 SQLALCHEMY_DATABASE_URL = os.environ["FASTAPI_DATABASE_URL"]
@@ -18,24 +19,24 @@ meta = MetaData()
 
 class_priors = Table(
    'class_priors', meta, 
-   Column('idx', String, primary_key = True), 
-   Column('cl', String, primary_key = True), 
+   Column('idx', String(64), primary_key = True), 
+   Column('cl', String(1), primary_key = True), 
    Column('p_real', Float), 
    Column('p_fake', Float), 
 )
 
 feature_probas = Table(
    'feature_probas', meta, 
-   Column('idx', String, primary_key = True), 
-   Column('word', String, primary_key = True), 
+   Column('idx', String(64), primary_key = True), 
+   Column('word', String(255), primary_key = True), 
    Column('p_real', Float), 
    Column('p_fake', Float), 
 )
 
 stats = Table(
    'stats', meta, 
-   Column('idx', String), 
-   Column('stats', String),
+   Column('idx', String(255)), 
+   Column('stats', Text),
 )
 
 meta.create_all(engine)
