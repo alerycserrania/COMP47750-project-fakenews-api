@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 
 import csv
-import io
 import sys
-import re
 import os
 from hdfs import InsecureClient
 
 path = sys.argv[1]
-
-with open('stopwords.txt', 'r', encoding='utf-8') as f:
-    STOPWORDS = set(f.read().splitlines())
 
 def get_feature_probas():
     client = InsecureClient(os.environ['FASTAPI_HADOOP_WEB_URL'])

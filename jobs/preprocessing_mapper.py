@@ -25,7 +25,6 @@ def tokenize(content):
 def mapper(input_stream, output_stream):
     reader = csv.reader(input_stream, quoting=csv.QUOTE_ALL)
 
-    next(reader) # skip header
     for i, line in enumerate(reader):
         fake_or_real, content = line[3], line[6]
         for token in tokenize(content):

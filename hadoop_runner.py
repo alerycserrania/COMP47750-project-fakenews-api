@@ -69,8 +69,7 @@ def fit_and_predict(data: IO, training_proportion: float):
         stats = generate_stats(idx, client)
         store_model(idx, client, stats)
     finally:
-        pass
-        # client.delete(f'{idx}/', recursive=True)
+        client.delete(f'{idx}/', recursive=True)
 
     return stats
 
@@ -180,6 +179,7 @@ def load_model(idx: str, client: InsecureClient):
             {"idx": idx}
         ).fetchone()
     
+    print(class_priors)
     class_priors = [l[1:] for l in class_priors]
     feature_probas = [l[1:] for l in feature_probas]
     stats = json.loads(stats[1])
@@ -198,7 +198,7 @@ def load_model(idx: str, client: InsecureClient):
 
 
 def split_data(data: IO, training_proportion: float):
-    lines = list(csv.reader(data, quoting=csv.QUOTE_ALL))
+    lines = list(csv.reader(data, quoting=csv.QUOTE_ALL))[1:]
     random.shuffle(lines)
     delim = int(len(lines) * training_proportion)
     return lines[:delim], lines[delim:]
@@ -223,18 +223,25 @@ def generate_stats(idx: str, client: InsecureClient):
             (word, int(count))
             for word, _, count in sorted(reader, key=lambda l: int(l[2]), reverse=True)[:100]
         ]
+
+    with client.read(f'{idx}/wordcount.csv', encoding='utf-8') as f:
+        reader = list(csv.reader(f, quoting=csv.QUOTE_MINIMAL))
+        nb_words_real_articles = 0
+        nb_words_fake_articles = 0
+        for _, r_count, p_count in reader:
+            nb_words_real_articles += int(r_count)
+            nb_words_fake_articles += int(p_count)
     
     with client.read(f'{idx}/test_result.csv', encoding='utf-8') as f:
         test_result = list(csv.reader(f, quoting=csv.QUOTE_MINIMAL))
 
     with client.read(f'{idx}/test_data.csv', encoding='utf-8') as f:
         test_data = list(csv.reader(f, quoting=csv.QUOTE_MINIMAL))
-
+    
     tp, tn = 0, 0
     fp, fn = 0, 0
     for i in range(len(test_result)):
         id_line = int(test_result[i][0])
-        print(test_result[i], test_data[id_line])
         if test_result[i][1] == 'f' and test_data[id_line][3] == 'f':
             tp += 1
         elif test_result[i][1] == 'r' and test_data[id_line][3] == 'r':
@@ -251,8 +258,8 @@ def generate_stats(idx: str, client: InsecureClient):
             "fake": nb_fake_articles,
         }, 
         "nb_words": {
-            # "real": nb_words_real_articles,
-            # "fake": nb_words_fake_articles,
+            "real": nb_words_real_articles,
+            "fake": nb_words_fake_articles,
         },
         "words_popularity_in_order": {
             "real": real_words_sorted,
