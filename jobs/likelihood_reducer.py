@@ -8,7 +8,7 @@ from hdfs import InsecureClient
 from collections import defaultdict
 
 path = sys.argv[1]
-ALPHA = 1.0
+ALPHA = 0.1
 
 
 def get_class_count_and_vocab_size():
