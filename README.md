@@ -3,7 +3,7 @@
 ## Requirements
 
 - Python 3.6+
-- Hadoop 3+ running at in pseudo or fully distributed mode
+- Hadoop 3+ running in pseudo or fully distributed mode
 - A MySQL Database
 
 ## Installation
