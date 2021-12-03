@@ -4,11 +4,7 @@ import sys
 
 def mapper(input_stream, output_stream):
     for line in input_stream:
-        key, _ = line.strip().split('\t')
-        output_stream.write(key.split()[1])
-        output_stream.write('\t')
-        output_stream.write('1')
-        output_stream.write('\n')
+        output_stream.write('1\t' + line)
     output_stream.flush()
 
 

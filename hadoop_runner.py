@@ -28,28 +28,40 @@ def fit_and_predict(data: IO, training_proportion: float):
             for line in tests:
                 writer.writerow(line)
         
-        # wordcount step: count number of occurence of words in fake and real news
-        os.system(f'mapred streaming -input {idx}/training_data.csv -output {idx}/wordcount '
-                f'-mapper jobs/wordcount_mapper.py -reducer jobs/wordcount_reducer.py')
-        os.system(f'hadoop fs -text {idx}/wordcount/* | hadoop fs -put - {idx}/wordcount.csv')
+        # preprocessing step: cleaning, stemming and vectorisation of training data
+        os.system(f'mapred streaming -input {idx}/training_data.csv -output {idx}/pre_training_data '
+                f'-mapper jobs/preprocessing_mapper.py -reducer jobs/preprocessing_reducer.py')
 
-        # vocab count step: count number of words (features) in the dataset
-        os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/nb_words '
-                f'-mapper jobs/vocab_reducer.py')
-        os.system(f'hadoop fs -text {idx}/nb_words/* | hadoop fs -put - {idx}/nb_words.txt')
+        # count articles step: count number of words (features) in the dataset
+        os.system(f'mapred streaming -input {idx}/pre_training_data -output {idx}/nb_articles '
+                f'-mapper jobs/get_article_count_mapper.py -reducer jobs/get_article_count_reducer.py')
+        os.system(f'hadoop fs -text {idx}/nb_articles/* | hadoop fs -put - {idx}/nb_articles.txt')
 
-        # class priors step: calculate log of class priors
-        os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/class_priors '
-                f'-mapper jobs/class_priors_mapper.py -reducer jobs/class_priors_reducer.py')
+        # vocab size step: get number of unique words in dataset
+        os.system(f'mapred streaming -input {idx}/pre_training_data -output {idx}/vocab_size '
+                f'-mapper jobs/get_vocab_size_mapper.py -reducer jobs/get_vocab_size_reducer.py')
+        os.system(f'hadoop fs -text {idx}/vocab_size/* | hadoop fs -put - {idx}/vocab_size.txt')
+
+        # class priors: compute log of class priors
+        os.system(f'mapred streaming -input {idx}/pre_training_data -output {idx}/class_priors '
+                f'-mapper jobs/class_priors_mapper.py -reducer "jobs/class_priors_reducer.py {idx}"')
         os.system(f'hadoop fs -text {idx}/class_priors/* | hadoop fs -put - {idx}/class_priors.csv')
-        
-        # feature probas step: calculate log of feature probas
-        os.system(f'mapred streaming -input {idx}/wordcount -output {idx}/feature_probas '
-                f'-mapper "jobs/feature_probas_reducer.py {idx}"')
+
+        # likelihood step: calculate log of likelihoods
+        os.system(f'mapred streaming -input {idx}/pre_training_data -output {idx}/feature_probas '
+                f'-mapper jobs/wordcount_mapper.py -reducer "jobs/likelihood_reducer.py {idx}"')
         os.system(f'hadoop fs -text {idx}/feature_probas/* | hadoop fs -put - {idx}/feature_probas.csv')
         
-        # run tests step: predict and create result file
-        os.system(f'mapred streaming -input {idx}/test_data.csv -output {idx}/test_result '
+        # wordcount step: count number of words for stats
+        os.system(f'mapred streaming -input {idx}/pre_training_data -output {idx}/wordcount '
+                f'-mapper jobs/wordcount_mapper.py -reducer "jobs/wordcount_reducer.py {idx}"')
+        os.system(f'hadoop fs -text {idx}/wordcount/* | hadoop fs -put - {idx}/wordcount.csv')
+
+        # preprocessing tests files
+        os.system(f'mapred streaming -input {idx}/test_data.csv -output {idx}/pre_test_data '
+                f'-mapper jobs/preprocessing_mapper.py -reducer jobs/preprocessing_reducer.py')
+
+        os.system(f'mapred streaming -input {idx}/pre_test_data -output {idx}/test_result '
                 f'-mapper "jobs/predict_mapper.py {idx}" -reducer "jobs/predict_reducer.py {idx}"')
         os.system(f'hadoop fs -text {idx}/test_result/* | hadoop fs -put - {idx}/test_result.csv')
 
@@ -57,7 +69,8 @@ def fit_and_predict(data: IO, training_proportion: float):
         stats = generate_stats(idx, client)
         store_model(idx, client, stats)
     finally:
-        client.delete(f'{idx}/', recursive=True)
+        pass
+        # client.delete(f'{idx}/', recursive=True)
 
     return stats
 
@@ -73,7 +86,11 @@ def predict(idx: str, tests: List[str]):
             for line in tests:
                 writer.writerow(['', '', '', '', '', '', line])
 
-        os.system(f'mapred streaming -input {idx}/test_data.csv -output {idx}/test_result '
+        os.system(f'mapred streaming -input {idx}/test_data.csv -output {idx}/pre_test_data '
+                f'-mapper jobs/preprocessing_mapper.py -reducer jobs/preprocessing_reducer.py')
+
+
+        os.system(f'mapred streaming -input {idx}/pre_test_data -output {idx}/test_result '
                 f'-mapper "jobs/predict_mapper.py {idx}" -reducer "jobs/predict_reducer.py {idx}"')
         os.system(f'hadoop fs -text {idx}/test_result/* | hadoop fs -put - {idx}/test_result.csv')
         
@@ -105,9 +122,9 @@ def store_model(idx: str, client: InsecureClient, stats: dict):
         class_priors = [{
             'idx': idx,
             'cl': cl,
-            'p_real': float(p_real),
-            'p_fake': float(p_fake),
-        } for cl, p_real, p_fake in reader]
+            'count': int(count),
+            'p': float(p),
+        } for cl, count, p in reader]
 
     with client.read(f'{idx}/feature_probas.csv', encoding='utf-8') as f:
         reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
@@ -120,7 +137,7 @@ def store_model(idx: str, client: InsecureClient, stats: dict):
 
     with SessionLocal() as db:
         db.execute(
-            text("INSERT INTO class_priors (idx, cl, p_real, p_fake) VALUES(:idx, :cl, :p_real, :p_fake)"),
+            text("INSERT INTO class_priors (idx, cl, count, p) VALUES(:idx, :cl, :count, :p)"),
             class_priors
         )
 
@@ -180,8 +197,6 @@ def load_model(idx: str, client: InsecureClient):
     return stats
 
 
-
-
 def split_data(data: IO, training_proportion: float):
     lines = list(csv.reader(data, quoting=csv.QUOTE_ALL))
     random.shuffle(lines)
@@ -189,42 +204,14 @@ def split_data(data: IO, training_proportion: float):
     return lines[:delim], lines[delim:]
 
 
-def confusion_matrix(idx: str, client: InsecureClient):
-    with client.read(f'{idx}/test_result.csv', encoding='utf-8') as f:
-        test_result = list(csv.reader(f, quoting=csv.QUOTE_MINIMAL))
-
-    with client.read(f'{idx}/test_data.csv', encoding='utf-8') as f:
-        test_data = list(csv.reader(f, quoting=csv.QUOTE_MINIMAL))
-
-    tp, tn = 0, 0
-    fp, fn = 0, 0
-    for i in range(len(test_result)):
-        idx = int(test_result[i][0])
-        if test_result[i][1] == 'f' and test_data[idx][3] == 'f':
-            tp += 1
-        elif test_result[i][1] == 'r' and test_data[idx][3] == 'r':
-            tn += 1
-        elif test_result[i][1] == 'f' and test_data[idx][3] == 'r':
-            fp += 1
-        else:
-            fn += 1
-
-    return [[tn, fp], [fn, tp]]
-
-
 def generate_stats(idx: str, client: InsecureClient):
-    with client.read(f'{idx}/training_data.csv', encoding='utf-8') as f:
-        articles = list(csv.reader(f, quoting=csv.QUOTE_ALL))
-        nb_real_articles = sum(1 for l in articles if l[3] == 'r')
-        nb_fake_articles = sum(1 for l in articles if l[3] == 'f')
-
     with client.read(f'{idx}/class_priors.csv', encoding='utf-8') as f:
         reader = csv.reader(f, quoting=csv.QUOTE_MINIMAL)
         for l in reader:
             if l[0] == 'r':
-                nb_words_real_articles = int(l[1])
+                nb_real_articles = int(l[1])
             if l[0] == 'f':
-                nb_words_fake_articles = int(l[1])
+                nb_fake_articles = int(l[1])
 
     with client.read(f'{idx}/wordcount.csv', encoding='utf-8') as f:
         reader = list(csv.reader(f, quoting=csv.QUOTE_MINIMAL))
@@ -247,6 +234,7 @@ def generate_stats(idx: str, client: InsecureClient):
     fp, fn = 0, 0
     for i in range(len(test_result)):
         id_line = int(test_result[i][0])
+        print(test_result[i], test_data[id_line])
         if test_result[i][1] == 'f' and test_data[id_line][3] == 'f':
             tp += 1
         elif test_result[i][1] == 'r' and test_data[id_line][3] == 'r':
@@ -263,8 +251,8 @@ def generate_stats(idx: str, client: InsecureClient):
             "fake": nb_fake_articles,
         }, 
         "nb_words": {
-            "real": nb_words_real_articles,
-            "fake": nb_words_fake_articles,
+            # "real": nb_words_real_articles,
+            # "fake": nb_words_fake_articles,
         },
         "words_popularity_in_order": {
             "real": real_words_sorted,

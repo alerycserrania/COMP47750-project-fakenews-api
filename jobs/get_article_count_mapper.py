@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 import sys
-import csv
 
 def reducer(input_stream, output_stream):
-    reader = csv.reader(input_stream, quoting=csv.QUOTE_MINIMAL)
-    output_stream.write(str(sum([1 for _ in reader])))
+    for line in input_stream:
+        output_stream.write('1\t' + line)
+    output_stream.flush()
 
 
 sys.stdin.reconfigure(encoding='utf-8')

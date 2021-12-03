@@ -35,7 +35,7 @@ def reducer(input_stream, output_stream):
             products[key][0] + class_priors['r'],
             products[key][1] + class_priors['f']
         )
-        writer.writerow([int(key), 'r' if products[key][0] > products[key][1] else 'f', *products[key]])
+        writer.writerow([key, 'r' if products[key][0] > products[key][1] else 'f', *products[key]])
 
 
 sys.stdin.reconfigure(encoding='utf-8')
